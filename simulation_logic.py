@@ -14,10 +14,24 @@ import matplotlib.pyplot as plt
 # =============================================================================
 # We define these globally so they match Unity exactly.
 C_MOVE = 3.0
-BETA = 2.0
+BETA = 1.0
 STARTING_FOOD = 150.0
 LEADER_SHARE = 0.2
 PLACEHOLDER = 0
+
+PREDATOR_PROFILES = {
+    "Baseline": {"agent_type": "Baseline", "M_i": 1.5, "Dbase_i": 0.1, "C_hunt_i": 5.0, "F_i": STARTING_FOOD},
+    "Expert": {"agent_type": "Expert", "M_i": 3.0, "Dbase_i": 0.15, "C_hunt_i": 3.0, "F_i": STARTING_FOOD},
+    "Freeloader": {"agent_type": "Freeloader", "M_i": 1.0, "Dbase_i": 0.3, "C_hunt_i": 2.0, "F_i": STARTING_FOOD},
+    "Greedy": {"agent_type": "Greedy", "M_i": 1.5, "Dbase_i": 0.4, "C_hunt_i": 5.0, "F_i": STARTING_FOOD},
+    "Newbie": {"agent_type": "Newbie", "M_i": 0.5, "Dbase_i": 0.1, "C_hunt_i": 10.0, "F_i": STARTING_FOOD}
+}
+
+PREY_PROFILES = {
+    "Hare": {"prey_type": 0, "P_solo": 0.7, "R_a": 20.0, "b_a": BETA},
+    "Stag": {"prey_type": 1, "P_solo": 0.4, "R_a": 55.0, "b_a": 1.5*BETA},
+    "Mammoth": {"prey_type": 2, "P_solo": 0.1, "R_a": 160.0, "b_a": 2.5*BETA}
+}
 
 # Axial directions for neighbors in a hex grid
 HEX_DIRECTIONS = [
@@ -186,7 +200,7 @@ class SimulationLogger:
         Args:
             episode_id (int): The current episode number (0 to 1,000,000).
             predators (list): The list of Predator objects from your engine.
-            tactic (str): The active tactic name (e.g., "EGALITARIAN", "ASSYMETRIC").
+            tactic (str): The active tactic name (e.g., "EGALITARIAN", "ASYMMETRIC").
         """
         filepath = self._get_filepath(tactic)
         file_exists = os.path.exists(filepath)
@@ -270,8 +284,8 @@ class SimulationLogger:
 
         # Fixed colors for tactics
         color_map = {
-            "EGALITERIAN": "green",
-            "ASSYMETRIC": "orange",
+            "EGALITARIAN": "green",
+            "ASYMMETRIC": "orange",
             "ALTRUISTIC": "red",
             "MERITOCRATIC": "blue"
         }
@@ -396,8 +410,8 @@ class SimulationLogger:
         }
 
         color_map = {
-            "EGALITERIAN": "green",
-            "ASSYMETRIC": "orange",
+            "EGALITARIAN": "green",
+            "ASYMMETRIC": "orange",
             "ALTRUISTIC": "red",
             "MERITOCRATIC": "blue"
         }
@@ -590,23 +604,18 @@ class SimulationEngine:
 # ------------------------------------------------------------------------------------------------------------------------------------
     def setup_agents(self, predator_count, prey_count):
         """Deterministic setup of agents on the grid."""
+        grid = self.grid
+        predator_list = self.predators
+        prey_list = self.prey
 
         # 1. Instantiate Predators
-        predator_profiles = {
-            "Baseline": {"agent_type": "Baseline", "M_i": 1.5, "Dbase_i": 0.1, "C_hunt_i": 5.0, "F_i": STARTING_FOOD},
-            "Expert": {"agent_type": "Expert", "M_i": 3.0, "Dbase_i": 0.15, "C_hunt_i": 3.0, "F_i": STARTING_FOOD},
-            "Freeloader": {"agent_type": "Freeloader", "M_i": 1.0, "Dbase_i": 0.3, "C_hunt_i": 2.0, "F_i": STARTING_FOOD},
-            "Greedy": {"agent_type": "Greedy", "M_i": 1.5, "Dbase_i": 0.4, "C_hunt_i": 5.0, "F_i": STARTING_FOOD},
-            "Newbie": {"agent_type": "Newbie", "M_i": 0.5, "Dbase_i": 0.1, "C_hunt_i": 10.0, "F_i": STARTING_FOOD}
-        }
-
-        type_cycle = list(predator_profiles.keys())
-
+        type_cycle = list(PREDATOR_PROFILES.keys())
+        
         for i in range(predator_count):
             # Seeded selection of predator type
-            q, r = self.grid.get_random_node()
+            q, r = grid.get_random_node()
             p_type = type_cycle[i % len(type_cycle)]
-            profile = predator_profiles[p_type]
+            profile = PREDATOR_PROFILES[p_type]
             pr = Predator(
                 agent_id = i,
                 agent_type = profile["agent_type"],
@@ -617,21 +626,16 @@ class SimulationEngine:
                 C_hunt_i = profile["C_hunt_i"],
                 F_i = profile["F_i"]
                 )
-            self.predators.append(pr)
+            predator_list.append(pr)
 
         # 2. Instantiate Prey
-        prey_profiles = {
-            "Hare": {"prey_type": 0, "P_solo": 0.7, "R_a": 20.0, "b_a": BETA},
-            "Stag": {"prey_type": 1, "P_solo": 0.4, "R_a": 55.0, "b_a": 1.5*BETA},
-            "Mammoth": {"prey_type": 2, "P_solo": 0.1, "R_a": 160.0, "b_a": 2.5*BETA}
-        }
-        type_choices = list(prey_profiles.keys())
+        type_choices = list(PREY_PROFILES.keys())
 
         for a in range(prey_count):
             # Seeded selection of prey type
-            q, r = self.grid.get_random_node()
+            q, r = grid.get_random_node()
             p_type = random.choice(type_choices)
-            profile = prey_profiles[p_type]
+            profile = PREY_PROFILES[p_type]
             pr = Prey(
                 prey_id = a + 100,
                 q = q,
@@ -641,7 +645,7 @@ class SimulationEngine:
                 R_a = profile["R_a"],
                 b_a = profile["b_a"]
                 )
-            self.prey.append(pr)       
+            prey_list.append(pr)       
 
 # ------------------------------------------------------------------------------------------------------------------------------------
 # --- THE "BRAINS" (Decision-Making Function) ---
@@ -744,14 +748,6 @@ class SimulationEngine:
         """ Calculates the Expected Utility of resting, E[U_Rest] = 0.0 (Idle, No Gain). """
         return 0.0
 
-    def Action_MOVE_utilityn(self, predator):
-        """ Calculates the best Expected Utility of Moving to a specific Hex. """
-        """ Hexes with worthwhile prey are prioritized. """
-        #TODO
-        neighbor_hexes = self.grid.get_neighbor_hexes(predator.q, predator.r)
-        new_hex = random.choice(list(neighbor_hexes))
-        return 1.0, new_hex[0], new_hex[1]
-    
     def Action_MOVE_utility(self, predator):
         """ Calculates the best Expected Utility of Moving to a specific Hex. """
         """ Using the Bellman's Equation, Hexes with worthwhile prey are prioritized. """
@@ -789,34 +785,41 @@ class SimulationEngine:
         return best_move_utility, best_hex[0], best_hex[1]
 
     def Action_SOLO_HUNT_utility(self, predator, prey_present):
-        """ Calculates the best Expected Utility of Solo Hunting in the specific Hex. """
-        """ That utility comes from first finding the best Prey Target for hunting """
-        hunting_options = {}
+        """ Calculates the best Expected Utility of Solo Hunting in the specific Hex.
+            That utility comes from first finding the best Prey Target for hunting. """
+        best_utility = float("-inf")
+        target_prey = None
+
         for prey in prey_present:
             P_capture = COMPUTE.P_capture_value(prey.P_solo, predator.M_i, prey.b_a, 1)
-            hunting_options[prey] = COMPUTE.Exp_Utility_value(P_capture, 1.0, prey.R_a, predator.C_hunt_i)
-        target_prey = max(hunting_options, key=hunting_options.get)
+            utility = COMPUTE.Exp_Utility_value(P_capture, 1.0, prey.R_a, predator.C_hunt_i)
 
-        return hunting_options[target_prey], target_prey  
+            if utility > best_utility:
+                best_utility = utility
+                target_prey = prey
+        
+        return best_utility, target_prey
 
     def Action_COALITION_HUNT_utility(self, predator, predators_present, prey_present):
-        """ Calculates the best Expected Utility of Solo Hunting in the specific Hex. """
-        """ That utility comes from first finding the best Prey Target for hunting , using the contributions from all predators present. """
-        """ The final expected utility comes from the initiator's share depending on the negotiation split tactic. """
-        hunting_options = {}
+        """ Calculates best expected utility and target prey for coalition hunting. """
+        best_utility = float("-inf")
+        target_prey = None
 
-        total_E_C = COMPUTE.E_C_value([predator])
-        total_E_C += COMPUTE.E_C_value(predators_present)
+        coalition = [predator] + predators_present
+        coalition_size = len(coalition)
+        total_E_C = COMPUTE.E_C_value(coalition)
 
-        coalition_shares = self.get_split_shares(predator, [predator]+predators_present)
-        initiator_share = coalition_shares[predator]
+        initiator_share = self.get_split_shares(predator, coalition)[predator]
 
         for prey in prey_present:
-            P_capture = COMPUTE.P_capture_value(prey.P_solo, total_E_C, prey.b_a, len([predator]+predators_present))
-            hunting_options[prey] = COMPUTE.Exp_Utility_value(P_capture, initiator_share, prey.R_a, predator.C_hunt_i)
-        target_prey = max(hunting_options, key=hunting_options.get)
+            P_capture = COMPUTE.P_capture_value(prey.P_solo, total_E_C, prey.b_a, coalition_size)
+            utility = COMPUTE.Exp_Utility_value(P_capture, initiator_share, prey.R_a, predator.C_hunt_i)
+            
+            if utility > best_utility:
+                best_utility = utility
+                target_prey = prey
 
-        return hunting_options[target_prey], target_prey, predators_present, initiator_share
+        return best_utility, target_prey, predators_present, initiator_share
     
 # ------------------------------------------------------------------------------------------------------------------------------------
 # --- THE "PHYSICS" (State Updates) ---
@@ -827,21 +830,15 @@ class SimulationEngine:
 
         if action == Action.MOVE:
             self.execute_movement(predator)
+            return
 
-        elif action == Action.SOLO_HUNT:
+        elif action in (Action.SOLO_HUNT, Action.COALITION_HUNT):
             target_prey = self.get_prey_by_id(predator.decision['target_prey_id'])
+            if action == Action.COALITION_HUNT:
+                self.execute_coalition_negotiation(predator, target_prey)
             self.execute_hunt(predator, target_prey)
             self.execute_prey_movement(target_prey)
-            
-            
-        elif action == Action.COALITION_HUNT:
-            target_prey = self.get_prey_by_id(predator.decision['target_prey_id'])
-            self.execute_coalition_negotiation(predator, target_prey)
-            self.execute_hunt(predator, target_prey)
-            self.execute_prey_movement(target_prey)
-
-        else: # action == Action.REST
-            pass
+            return
 
     def execute_movement(self, predator):
         """ Predator moves to target Hex coords. """
@@ -958,36 +955,30 @@ class SimulationEngine:
 # ------------------------------------------------------------------------------------------------------------------------------------
 # --- THE GETTER FUNCTIONS ---
 # ------------------------------------------------------------------------------------------------------------------------------------
-    def get_available_predators(self, predators):
-        """ Gets alive Predators that haven't acted yet. """
-        avail_preds = []
-        for p in predators:
-            if p.is_alive == True and p.has_acted == False:
-                avail_preds.append(p)
-        return avail_preds
-    
     def get_hunt_success(self, initiator, partners, target_prey):
         """ Returns the hunt's success probability. """
         """ When No Partners, it is a Solo Hunt. """
-        E_C = COMPUTE.E_C_value([initiator])
-
         preds = partners or []
-        E_C += COMPUTE.E_C_value(preds)
+        E_C = COMPUTE.E_C_value([initiator]) + COMPUTE.E_C_value(preds)
+        coalition_size = 1 + len(preds)
             
-        return COMPUTE.P_capture_value(target_prey.P_solo, E_C, target_prey.b_a, len([initiator]+preds))
+        return COMPUTE.P_capture_value(target_prey.P_solo, E_C, target_prey.b_a, coalition_size)
 
     def get_nearby_agents(self, predator, q, r):
         """ Gets all the Agents in the same Hex(q, r) as the Target. """
         """ Returns Alive Predators that haven't acted and alive Prey whose not been targeted. """
-        predators_present = []
-        prey_present = []
+        predator_list = self.predators
+        prey_list = self.prey
 
-        for pred in self.predators:
-            if pred.q == q and pred.r == r and pred.is_alive == True and pred.has_acted == False and pred != predator:
-                predators_present.append(pred)
-        for prey in self.prey:
-            if prey.q == q and prey.r == r and prey.is_alive == True and prey.targeted == False:
-                prey_present.append(prey)
+        predators_present = [
+            pred for pred in predator_list
+            if pred.q == q and pred.r == r and pred.is_alive == True and pred.has_acted == False and pred != predator
+        ]
+
+        prey_present = [
+            prey for prey in prey_list
+            if prey.q == q and prey.r == r and prey.is_alive == True and prey.targeted == False
+        ]
 
         return predators_present, prey_present
     
@@ -1005,13 +996,13 @@ class SimulationEngine:
         """
         shares = {}
 
-        if self.tactic not in ["EGALITERIAN", "MERITOCRATIC", "ALTRUISTIC", "ASSYMETRIC"]:
+        if self.tactic not in ["EGALITARIAN", "MERITOCRATIC", "ALTRUISTIC", "ASYMMETRIC"]:
             raise ValueError(f"Unknown tactic: {self.tactic}")
 
         for predator in coalition:
 
-            if self.tactic == "EGALITERIAN":
-                share = COMPUTE.Egaliterian_split_value(predator, coalition)
+            if self.tactic == "EGALITARIAN":
+                share = COMPUTE.Egalitarian_split_value(coalition)
 
             elif self.tactic == "MERITOCRATIC":
                 share = COMPUTE.Meritocratic_split_value(predator, coalition)
@@ -1019,8 +1010,8 @@ class SimulationEngine:
             elif self.tactic == "ALTRUISTIC":
                 share = COMPUTE.Altruistic_split_value(predator, coalition)
 
-            elif self.tactic == "ASSYMETRIC":
-                share = COMPUTE.Assymetric_split_value(predator, initiator, coalition)
+            elif self.tactic == "ASYMMETRIC":
+                share = COMPUTE.Asymmetric_split_value(predator, initiator, coalition)
 
             shares[predator] = share
 
@@ -1041,6 +1032,11 @@ class SimulationEngine:
             predator.decision = {}
 
         predator.decision.update(kwargs)
+
+    def update_is_alive(self, predator):
+        """ Checks if the Predator is alive. """
+        predator.is_alive = predator.F_i > 0
+
 # ------------------------------------------------------------------------------------------------------------------------------------       
     def reset_cycle(self):
         """ Resets the useful variables for every step cycle. """
@@ -1068,19 +1064,23 @@ class SimulationEngine:
         3. Execution for every Predator's Decision
         4. Updating Agents and Stats
         """
-        avail_preds = self.get_available_predators(self.predators)
-        shuffled_avail_preds = random.sample(avail_preds, len(avail_preds))
+        predator_list = self.predators
+        prey_list = self.prey
+        tick = self.current_tick
 
-        for predator in shuffled_avail_preds:                                       # For each *alive* Predator that hasn't *acted* yet
+        avail_preds = [pr for pr in predator_list if pr.is_alive and not pr.has_acted]
+        random.shuffle(avail_preds)
+
+        for predator in avail_preds:                                       # For each *alive* Predator that hasn't *acted* yet
             self.form_best_decision(predator)                                       # Decide what is best for him to do
             self.execute_best_decision(predator)                                    # Execute based on that decision
+            self.update_is_alive(predator)
 
-        if self.current_tick % 10 == 0:
-            for prey in self.prey:
+        if tick % 10 == 0:
+            for prey in prey_list:
                 self.execute_prey_movement(prey)
 
         self.reset_cycle()
-        self.current_tick += 1
 
 # =============================================================================
 # 6. HELPFUL COMPUTATION CLASS
@@ -1124,60 +1124,64 @@ class COMPUTE:
         """Return True/False whether the predator's share of the reward is higher than its effective Demand Factor. """
         return share >= COMPUTE.D_eff_value(pred.F_i, pred.Dbase_i, pred.C_hunt_i)
     
-    def Egaliterian_split_value(predator, coalition):
+    def Egalitarian_split_value(coalition):
         """ Fair Split. Shares are equally divided among all Predators."""
         coalition_size = len(coalition)
         return 1/coalition_size
 
     def Meritocratic_split_value(predator, coalition):
         """ Contribution Split... Share is proportional to Predator's skill versus the sum skill of the coalition. """
-        total_M_i = 0
-        for p in coalition:
-            total_M_i += p.M_i
-        return predator.M_i / total_M_i
+        coalition_M_i = sum(pr.M_i for pr in coalition)
+
+        return predator.M_i / coalition_M_i
 
     def Altruistic_split_value(predator, coalition):
-        """ Need-Based Split... Share is proportional to Predator's Deff_i versus the sum Deffs of the coalition. """
+        """ Need-Based Split... Share is proportional to Predator's Effective demand versus the sum of effective demands of the coalition. """
         demand = COMPUTE.D_eff_value(predator.F_i, predator.Dbase_i, predator.C_hunt_i)
-        coalition_demand = 0 
-
-        for pr in coalition:
-            coalition_demand += COMPUTE.D_eff_value(pr.F_i, pr.Dbase_i, pr.C_hunt_i)
+        coalition_demand = sum(COMPUTE.D_eff_value(pr.F_i, pr.Dbase_i, pr.C_hunt_i) for pr in coalition)
 
         return demand / coalition_demand
 
-    def Assymetric_split_value(predator, initiator, coalition):
+    def Asymmetric_split_value(predator, initiator, coalition):
         """ Lion's share Split. Initiator gets a flat share cut and the rest is equally distributed among all Predators. """
-        partners_share = 1 - LEADER_SHARE
         coalition_size = len(coalition)
+        partners_share = (1 - LEADER_SHARE) / coalition_size
+
         if predator == initiator:
-            return LEADER_SHARE + partners_share/coalition_size
+            return LEADER_SHARE + partners_share
         else:
-            return partners_share/coalition_size
+            return partners_share
 
 # =============================================================================
 # 6. HEADLESS CONTROLLER (The Episode Loop)
 # =============================================================================
 def run_batch_simulation(episodes = 50):
-    """
-    Main loop to run multiple episodes and log results to CSV.
-    """
+    """ Main loop to run multiple episodes and log results to CSV. """
     logger = SimulationLogger("results")
+    tactics = ["EGALITARIAN", "MERITOCRATIC", "ALTRUISTIC", "ASYMMETRIC"]
+    max_ticks = 500
 
-    for tactic in ["EGALITERIAN", "MERITOCRATIC", "ALTRUISTIC", "ASSYMETRIC"]:
-        
+    for tactic in tactics:
         for ep in range(episodes):
-            engine = SimulationEngine(predator_count=10, prey_count=25, radius=5, tactic=tactic, seed = ep)
-            # Run until extinction or time limit
-            while any(p.is_alive for p in engine.predators) and engine.current_tick < 500:
+
+            engine = SimulationEngine(
+                predator_count=10, 
+                prey_count=25, 
+                radius=5, 
+                tactic=tactic, 
+                seed = ep
+            )
+
+            predators = engine.predators
+
+            while  engine.current_tick < max_ticks and any(p.is_alive for p in predators):
                 engine.step()
+                engine.current_tick += 1
 
-            logger.update_global_stats(engine.predators, engine.tactic)
-            # Log episode results
+            logger.update_global_stats(predators, tactic)
             # if (ep + 1) % 5 == 0 or ep == episodes - 1:
-            logger.log_results(ep, engine.predators, engine.tactic)
+            logger.log_results(ep, predators, tactic)
 
-    # logger.plot_predator_dynamics("results")
     logger.plot_tactic_comparison_means("results")
 
 if __name__ == "__main__":
@@ -1190,10 +1194,10 @@ if __name__ == "__main__":
 # if __name__ == "__main__":
 #     # To prove reproducibility, we run two separate engines with the same seed.
 #     print("RUNNING TEST 1...")
-#     sim1 = SimulationEngine(predator_count=3, prey_count=2, radius=5, tactic="EGALITERIAN", seed=12345)
+#     sim1 = SimulationEngine(predator_count=3, prey_count=2, radius=5, tactic="EGALITARIAN", seed=12345)
     
 #     print("\nRUNNING TEST 2 (Should match Test 1 exactly)...")
-#     sim2 = SimulationEngine(predator_count=3, prey_count=2, radius=5, tactic="EGALITERIAN", seed=12345)
+#     sim2 = SimulationEngine(predator_count=3, prey_count=2, radius=5, tactic="EGALITARIAN", seed=12345)
     
 #     # Check first predator's position to verify
 #     if sim1.predators[0].q == sim2.predators[0].q and sim1.predators[0].r == sim2.predators[0].r:
