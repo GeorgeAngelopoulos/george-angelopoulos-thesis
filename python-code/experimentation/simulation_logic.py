@@ -651,93 +651,85 @@ class SimulationEngine:
 # --- THE "BRAINS" (Decision-Making Function) ---
 # ------------------------------------------------------------------------------------------------------------------------------------
     def form_best_decision(self, predator):
-        """ Calculates the expected utility for REST, MOVE, SOLO_HUNT and COALITION_HUNT. """
-        """ Returns the Best Action to execute based on that utility. """
-        avail_actions = []
-        utility_options = {}
-        
+        """ Calculates the expected utility for REST, MOVE, SOLO_HUNT and COALITION_HUNT.
+        Returns the Best Action to execute based on that utility. """
         # --- INITIAL OBSERVATION ---
         predators_present, prey_present = self.get_nearby_agents(predator, predator.q, predator.r)
-
-        # --- BASE AVAILABLE ACTIONS ---
-        avail_actions.append(Action.REST)
-        avail_actions.append(Action.MOVE)
         
-        # --- CONDITIONAL ACTIONS ---
+        best_action = None
+        best_utility = float("-inf")
+        best_data = {}
+
+        # --- REST --- 
+        utility = self.Action_REST_utility()
+        if utility > best_utility:
+            best_action = Action.REST
+            best_utility = utility
+            best_data = {}
+        
+        # --- MOVE ---
+        utility, q, r = self.Action_MOVE_utility(predator)
+        if utility > best_utility:
+            best_action = Action.MOVE
+            best_utility = utility
+            best_data = {"q": q, "r": r}
+        
+        # --- SOLO HUNT ---
         if prey_present:
-            avail_actions.append(Action.SOLO_HUNT)
 
+            utility, target_prey = self.Action_SOLO_HUNT_utility(predator, prey_present)
+            if utility > best_utility:
+                best_action = Action.SOLO_HUNT
+                best_utility = utility
+                best_data = {"prey": target_prey}
+        
+        # --- COALITION HUNT ---
         if prey_present and predators_present:
-            avail_actions.append(Action.COALITION_HUNT)
 
-        
-        # --- FINDING EXPECTED UTILITIES ---
-        for action in avail_actions:
+            utility, target_prey, partners, share = self.Action_COALITION_HUNT_utility(predator, predators_present, prey_present)
+            if utility > best_utility:
+                best_action = Action.COALITION_HUNT
+                best_utility = utility
+                best_data = {"prey": target_prey, "partners": partners, "share": share}
 
-            if action == Action.REST:
-                utility_options[action] = self.Action_REST_utility()
-
-            elif action == Action.MOVE:
-                utility_options[action], best_q, best_r = self.Action_MOVE_utility(predator)
-            
-            elif action == Action.SOLO_HUNT:
-                utility_options[action], target_prey = self.Action_SOLO_HUNT_utility(predator, prey_present)
-
-            elif action == Action.COALITION_HUNT:
-                utility_options[action], target_prey, potential_partners, share = self.Action_COALITION_HUNT_utility(predator, predators_present, prey_present)
-        
-        # --- DECISION BASED ON MAX EXPECTED UTILITY --- 
-        best_action = max(utility_options, key=utility_options.get)
+        # --- BUILD DECISION ---
+        predator.decision = {
+            'action_type': best_action,
+            'utility': best_utility,
+            'target_q': predator.q,
+            'target_r': predator.r,
+            'partners': None,
+            'final_share': 0.0,
+            'target_prey_id': 0,
+            'hunt_success': 0.0
+        }
 
         if best_action == Action.MOVE:
-            predator.decision = {
-                'action_type': best_action,
-                'utility': utility_options[best_action],
-                'target_q': best_q,
-                'target_r': best_r,
-                'partners': None,       
-                'final_share': 0.0,                    
-                'target_prey_id': 0,                             
-                'hunt_success': 0.0
-            }
 
+            self.update_decision(predator, 
+                target_q = best_data["q"],
+                target_r = best_data["r"]
+                )
+            
         elif best_action == Action.SOLO_HUNT:
-            target_prey.targeted = True
-            predator.decision = {
-                'action_type': best_action,
-                'utility': utility_options[best_action],
-                'target_q': predator.q,
-                'target_r': predator.r,
-                'partners': None,       
-                'final_share': 1.0,                    
-                'target_prey_id': target_prey.prey_id,                             
-                'hunt_success': self.get_hunt_success(predator, None, target_prey)                
-            }
 
+            prey = best_data["prey"]
+            prey.targeted = True
+            self.update_decision(predator,
+                target_prey_id = prey.prey_id,
+                final_share = 1.0,
+                hunt_success = self.get_hunt_success(predator, None, prey))
+        
         elif best_action == Action.COALITION_HUNT:
-            target_prey.targeted = True
-            predator.decision = {
-                'action_type': best_action,
-                'utility': utility_options[best_action],
-                'target_q': predator.q,
-                'target_r': predator.r,
-                'partners': potential_partners,       
-                'final_share': share,                    
-                'target_prey_id': target_prey.prey_id,                             
-                'hunt_success': self.get_hunt_success(predator, potential_partners, target_prey)                
-            }
 
-        else: # Action.Rest
-            predator.decision = {
-                'action_type': best_action,
-                'utility': utility_options[best_action],
-                'target_q': predator.q,
-                'target_r': predator.r,
-                'partners': None,       
-                'final_share': 0.0,                    
-                'target_prey_id': 0,                             
-                'hunt_success': 0.0
-            }
+            prey = best_data["prey"]
+            prey.targeted = True
+            self.update_decision(predator,
+                partners = best_data["partners"],
+                final_share = best_data["share"],
+                target_prey_id = prey.prey_id,
+                hunt_success = self.get_hunt_success(predator, best_data["partners"], prey)
+                )
 
         predator.has_acted = True
 
@@ -748,7 +740,7 @@ class SimulationEngine:
         """ Calculates the Expected Utility of resting, E[U_Rest] = 0.0 (Idle, No Gain). """
         return 0.0
 
-    def Action_MOVE_utility(self, predator):
+    def Action_MOVE_utilityOLD(self, predator):
         """ Calculates the best Expected Utility of Moving to a specific Hex. """
         """ Using the Bellman's Equation, Hexes with worthwhile prey are prioritized. """
         gamma = 0.9
@@ -776,6 +768,58 @@ class SimulationEngine:
 
                 V_best_hex = max(V_best_hex, V_adj_hex)
 
+            move_utility = -C_MOVE + gamma * V_best_hex
+
+            if move_utility > best_move_utility:
+                best_move_utility = move_utility
+                best_hex = (new_q, new_r)
+
+        return best_move_utility, best_hex[0], best_hex[1]
+
+    def Action_MOVE_utility(self, predator):
+        """
+        Assigns a forward-looking (myopic) utility to moving.
+        Encourages exploration towards valuable prey using discounted rewards.
+        """
+        gamma = 0.9
+        neighbor_hexes = self.grid.get_neighbor_hexes(predator.q, predator.r)
+
+        # --- Precompute utility per prey type ---
+        type_utilities = {}
+        for profile in PREY_PROFILES.values():
+            p_type = profile['prey_type']
+
+            P_capture = COMPUTE.P_capture_value(profile["P_solo"], predator.M_i, profile["b_a"], 1)
+            U_solo = COMPUTE.Exp_Utility_value(P_capture, 1.0, profile["R_a"], predator.C_hunt_i)
+
+            type_utilities[p_type] = U_solo
+
+        # --- Evaluate each neighboring Hex ---
+        best_move_utility = float('-inf')
+        best_hex = (predator.q, predator.r)
+
+        for new_q, new_r in neighbor_hexes:
+
+            V_best_hex = float('-inf')
+            for prey in self.prey:
+
+                U_solo = type_utilities[prey.prey_type]
+                distance = axial_distance((new_q, new_r), (prey.q, prey.r))
+
+                if distance == 0:
+                    V_adj_hex = U_solo
+                else:
+                    gamma_d = gamma ** distance
+                    # discounted future reward
+                    discounted_reward = gamma_d * U_solo
+                    # cumulative movement cost (geometric series)
+                    discounted_cost = C_MOVE * (1 - gamma_d) / (1 - gamma)
+                    V_adj_hex = discounted_reward - discounted_cost
+                   
+                if V_adj_hex > V_best_hex:
+                    V_best_hex = V_adj_hex
+                                
+            # final move utility
             move_utility = -C_MOVE + gamma * V_best_hex
 
             if move_utility > best_move_utility:
@@ -858,99 +902,92 @@ class SimulationEngine:
         """ Resolves the Predator's or Coalition's Hunt.
             Updates Food Stockpile based on the success. """
         
-        success = random.random() < predator.decision['hunt_success']
-        partners = predator.decision['partners'] or []
-        
-        participants = [predator] + partners
+        decision = predator.decision
+        success = random.random() < decision['hunt_success']
+
+        partners = decision['partners'] or []
+        participants = [predator, *partners]
 
         for p in participants:
 
+            p_decision = p.decision
+            action_type = p_decision['action_type']
+
             if success:
-                reward = p.decision['final_share'] * target_prey.R_a
+                reward = p_decision['final_share'] * target_prey.R_a
                 utility = reward - p.C_hunt_i
             else:
-                utility = (-1)*p.C_hunt_i
-            
+                utility = - p.C_hunt_i
+                
             p.F_i += utility
 
-            if p == predator and p.decision['action_type'] == Action.COALITION_HUNT:
-                p.utility_gained_initiator += utility
+            # --- Stats Update ---
+            if action_type == Action.COALITION_HUNT:
                 p.coalition_hunts_performed += 1
-
-            elif p != predator and p.decision['action_type'] == Action.COALITION_HUNT:
-                p.utility_gained_partner += utility
-                p.coalition_hunts_performed += 1
-
-            elif p.decision['action_type'] == Action.SOLO_HUNT:
+                if p is predator:
+                    p.utility_gained_initiator += utility
+                else:
+                    p.utility_gained_partner += utility
+            
+            elif action_type == Action.SOLO_HUNT:
                 p.utility_gained_solo += utility
-                p.solo_hunts_performed += 1            
+                p.solo_hunts_performed += 1
+      
 
     def execute_coalition_negotiation(self, initiator, target_prey):
-        """ 
-        1. Initiator proposes a coalition hunt for the chosen prey using the same split rule to all predator partners.
-
-        2. Each predator either accepts or declines the Utility Check by:
-            - Evaluating its computed share vs their computed Effective Demand Factor (Deff_i)
-            
-        3. Coalition forms with accepted predators only.
-            - Real shares are recomputed based on the new coalition size
-
-        4. Hunt occurs
-            - Success depends on realized coalition size
-            - Rewards are distributed
-
-        5. Turn Resolution:
-            - Initiator + acceptors -> have acted, ending their turn
-            - Rejectors -> have not acted, will decide and act normally later 
-        """
-        coalition_predators = initiator.decision['partners']
+        """Iterative coalition negotiation until stable acceptance."""
+        partners = initiator.decision['partners']
+        coalition_predators = partners
 
         while True:
 
-            total_E_C = COMPUTE.E_C_value([initiator])
-            total_E_C += COMPUTE.E_C_value(coalition_predators)
-            coalition_success = COMPUTE.P_capture_value(target_prey.P_solo, total_E_C, target_prey.b_a, len([initiator]+coalition_predators))
+            coalition = [initiator, *coalition_predators]
+            coalition_size = len(coalition)
 
-            coalition_shares = self.get_split_shares(initiator, [initiator]+coalition_predators)
-            
-            accepted = []
-            rejected = []
+            total_E_C = COMPUTE.E_C_value(coalition)
+            coalition_success = COMPUTE.P_capture_value(target_prey.P_solo, total_E_C, target_prey.b_a, coalition_size)
+            coalition_shares = self.get_split_shares(initiator, coalition)
 
-            for pred in coalition_predators:
-                if self.get_coalition_checks(pred, coalition_success, coalition_shares[pred], target_prey):
-                    accepted.append(pred)
-                else:
-                    rejected.append(pred)
-            
-            coalition_predators = accepted
+            # --- Acceptance Step ---
+            accepted_predators = [p for p in coalition_predators
+                                  if self.get_coalition_checks(p, coalition_success, coalition_shares[p], target_prey)]
+            # --- STOP CONDITION ---
+            if len(accepted_predators) == len(coalition_predators):
+                break # stable coalition
 
-            if len(coalition_predators) == 0:
-
-                self.update_decision(initiator, 
+            # --- If everyone rejected -> Revert to Solo Hunt ---
+            if not accepted_predators:
+                self.update_decision(initiator,
                     action_type = Action.SOLO_HUNT,
                     hunt_success = COMPUTE.P_capture_value(target_prey.P_solo, initiator.M_i, target_prey.b_a, 1),
                     final_share = 1.0,
                     partners = None
                 )
-                break
+                return
+            # --- Otherwise shrink coalition and repeat ---
+            coalition_predators = accepted_predators
 
-            else:
-                self.update_decision(initiator, 
-                    hunt_success = coalition_success,
-                    final_share = coalition_shares[initiator],
-                    partners = coalition_predators
-                )
+        # --- FINAL COALITION ---
+        coalition = [initiator, *coalition_predators]
+        total_E_C = COMPUTE.E_C_value(coalition)
+        coalition_success = COMPUTE.P_capture_value(target_prey.P_solo, total_E_C, target_prey.b_a, len(coalition))
+        coalition_shares = self.get_split_shares(initiator, coalition)
 
-                for pred in coalition_predators:
+        # --- Update Initiator ---
+        self.update_decision(initiator,
+            hunt_success = coalition_success,
+            final_share = coalition_shares[initiator],
+            partners = coalition_predators
+        )
 
-                    self.update_decision(pred,
-                        action_type = Action.COALITION_HUNT, 
-                        hunt_success = coalition_success,
-                        final_share = coalition_shares[pred],
-                    )                    
-                    pred.has_acted = True
-                break
-                
+        # --- Update Partners ---
+        for p in coalition_predators:
+            self.update_decision(p,
+                action_type = Action.COALITION_HUNT,
+                hunt_success = coalition_success,
+                final_share = coalition_shares[p]
+            )
+            p.has_acted = True
 
 # ------------------------------------------------------------------------------------------------------------------------------------
 # --- THE GETTER FUNCTIONS ---
