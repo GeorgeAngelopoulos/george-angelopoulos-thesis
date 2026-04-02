@@ -15,16 +15,15 @@ import matplotlib.pyplot as plt
 # We define these globally so they match Unity exactly.
 C_MOVE = 3.0
 BETA = 1.0
-STARTING_FOOD = 150.0
+STARTING_FOOD = 100.0
 LEADER_SHARE = 0.2
 PLACEHOLDER = 0
 
 PREDATOR_PROFILES = {
     "Baseline": {"agent_type": "Baseline", "M_i": 1.5, "Dbase_i": 0.1, "C_hunt_i": 5.0, "F_i": STARTING_FOOD},
-    "Expert": {"agent_type": "Expert", "M_i": 3.0, "Dbase_i": 0.15, "C_hunt_i": 3.0, "F_i": STARTING_FOOD},
-    "Freeloader": {"agent_type": "Freeloader", "M_i": 1.0, "Dbase_i": 0.3, "C_hunt_i": 2.0, "F_i": STARTING_FOOD},
-    "Greedy": {"agent_type": "Greedy", "M_i": 1.5, "Dbase_i": 0.4, "C_hunt_i": 5.0, "F_i": STARTING_FOOD},
-    "Newbie": {"agent_type": "Newbie", "M_i": 0.5, "Dbase_i": 0.1, "C_hunt_i": 10.0, "F_i": STARTING_FOOD}
+    "Specialist": {"agent_type": "Specialist", "M_i": 3.0, "Dbase_i": 0.266, "C_hunt_i": 15.0, "F_i": STARTING_FOOD},
+    "Newbie": {"agent_type": "Newbie", "M_i": 0.17, "Dbase_i": 0.1, "C_hunt_i": 3.0, "F_i": STARTING_FOOD},
+    "Freeloader": {"agent_type": "Freeloader", "M_i": 0.8, "Dbase_i": 0.4, "C_hunt_i": 3.33, "F_i": STARTING_FOOD}
 }
 
 PREY_PROFILES = {
@@ -182,191 +181,303 @@ class SimulationLogger:
         """Helper to create a filename based on the current negotiation tactic."""
         return os.path.join(self.base_dir, f"results_{tactic}.csv")
 
-    def update_global_stats(self, predators, tactic):
+    def compute_episode_statistics(self, predators):
+        """
+        Computes per-predator-type averages for a single episode.
+
+        Returns:
+            dict: {
+                predator_type: {
+                    "avg_solo_hunts": float,
+                    "avg_coalition_hunts": float,
+                    "avg_utility_solo": float,
+                    "avg_utility_initiator": float,
+                    "avg_utility_partner": float
+                }
+            }
+        """
+        # --- Group predators by type ---
+        type_groups = defaultdict(list)
         for p in predators:
-            # Add this episode's stats to cumulative totals for this tactic
-            self.global_stats[tactic][p.agent_id]["solo_hunts_performed"] += p.solo_hunts_performed
-            self.global_stats[tactic][p.agent_id]["coalition_hunts_performed"] += p.coalition_hunts_performed
-            self.global_stats[tactic][p.agent_id]["utility_gained_solo"] += p.utility_gained_solo
-            self.global_stats[tactic][p.agent_id]["utility_gained_initiator"] += p.utility_gained_initiator
-            self.global_stats[tactic][p.agent_id]["utility_gained_partner"] += p.utility_gained_partner
+            type_groups[p.agent_type].append(p)
 
-    def log_results(self, episode_id, predators, tactic):
+        episode_stats = {}
+
+        # --- Compute averages per type ---
+        for predator_type, group in type_groups.items():
+
+            n = len(group)
+            if n == 0:
+                continue
+
+            total_solo = sum(p.solo_hunts_performed for p in group)
+            total_coal = sum(p.coalition_hunts_performed for p in group)
+            total_u_solo = sum(p.utility_gained_solo for p in group)
+            total_u_init = sum(p.utility_gained_initiator for p in group)
+            total_u_part = sum(p.utility_gained_partner for p in group)
+
+            episode_stats[predator_type] = {
+                "avg_solo_hunts": total_solo / n,
+                "avg_coalition_hunts": total_coal / n,
+                "avg_utility_solo": total_u_solo / n,
+                "avg_utility_initiator": total_u_init / n,
+                "avg_utility_partner": total_u_part / n
+            }
+
+        return episode_stats
+
+    def batch_update(self, tactic, episode_stats, episode_id, batch_size=1000):
         """
-        Logs the final state of all predators for a single episode.
-        Creates one row per predator (Tidy Data format) to allow for 
-        detailed role and inequality analysis.
-        
+        Batching layer that aggregates episode-level statistics into fixed-size batches.
+
         Args:
-            episode_id (int): The current episode number (0 to 1,000,000).
-            predators (list): The list of Predator objects from your engine.
-            tactic (str): The active tactic name (e.g., "EGALITARIAN", "ASYMMETRIC").
-        """
-        filepath = self._get_filepath(tactic)
-        file_exists = os.path.exists(filepath)
+            tactic (str): current tactic
+            episode_stats (dict): output of compute_episode_statistics()
+            episode_id (int): current episode index
+            batch_size (int): number of episodes per batch
 
-        # Open in append mode to keep results from all episodes
-        with open(filepath, mode='a', newline='') as f:
-            writer = csv.writer(f)
-            
-            # Write header only if this is a new file for this tactic
-            if not file_exists:
-                # Add predator_type column
-                headers = self.headers.copy()
-                headers.insert(2, "predator_type")
-                writer.writerow(headers)
-
-            for p in predators:
-
-                cumulative = self.global_stats[tactic][p.agent_id]
-
-                row = [
-                    episode_id,
-                    p.agent_id,
-                    p.agent_type,  # <-- log the predator type
-                    cumulative["solo_hunts_performed"],
-                    cumulative["coalition_hunts_performed"],
-                    round(cumulative["utility_gained_solo"], 2),
-                    round(cumulative["utility_gained_initiator"], 2),
-                    round(cumulative["utility_gained_partner"], 2)
-                ]
-                writer.writerow(row)
-
-    def plot_predator_dynamics(self, results_dir="results"):
-        """
-        For each predator:
-            - One figure
-            - 3x2 subplot grid
-            - X-axis = episode_id
-            - Y-axis = per-interval change (not cumulative)
-            - Lines = different tactics
-            - Predator type included in the figure title
+        Returns:
+            dict or None:
+                - dict → batch completed (ready to log)
+                - None → batch still accumulating
         """
 
-        pattern = os.path.join(results_dir, "results_*.csv")
-        files = glob.glob(pattern)
+        # -----------------------------
+        # 1. Initialize buffer if needed
+        # -----------------------------
+        if not hasattr(self, "batch_buffer"):
+            self.batch_buffer = defaultdict(lambda: defaultdict(lambda: {
+                "count": 0,
+                "sum_solo_hunts": 0.0,
+                "sum_coalition_hunts": 0.0,
+                "sum_utility_solo": 0.0,
+                "sum_utility_initiator": 0.0,
+                "sum_utility_partner": 0.0
+            }))
 
-        if not files:
-            print("No result files found.")
-            return
+        # -----------------------------
+        # 2. Accumulate episode stats
+        # -----------------------------
+        for predator_type, stats in episode_stats.items():
 
-        all_data = {}
-        predators_set = set()
+            buf = self.batch_buffer[tactic][predator_type]
 
-        # Load CSVs
-        for filepath in files:
-            filename = os.path.basename(filepath)
-            tactic = filename.replace("results_", "").replace(".csv", "")
+            buf["count"] += 1
 
-            df = pd.read_csv(filepath)
-            predators_set.update(df["predator_id"].unique())
-            all_data[tactic] = df
+            buf["sum_solo_hunts"] += stats["avg_solo_hunts"]
+            buf["sum_coalition_hunts"] += stats["avg_coalition_hunts"]
+            buf["sum_utility_solo"] += stats["avg_utility_solo"]
+            buf["sum_utility_initiator"] += stats["avg_utility_initiator"]
+            buf["sum_utility_partner"] += stats["avg_utility_partner"]
 
-        predators = sorted(list(predators_set))
-        tactics = sorted(list(all_data.keys()))
+        # -----------------------------
+        # 3. Check if batch is complete
+        # -----------------------------
+        if (episode_id + 1) % batch_size != 0:
+            return None
 
-        stats = [
-            "solo_hunts_performed",
-            "coalition_hunts_performed",
-            "utility_gained_solo",
-            "utility_gained_initiator",
-            "utility_gained_partner"
+        # -----------------------------
+        # 4. Finalize batch results
+        # -----------------------------
+        batch_result = {}
+
+        for predator_type, buf in self.batch_buffer[tactic].items():
+
+            n = buf["count"]
+            if n == 0:
+                continue
+
+            batch_result[predator_type] = {
+                "avg_solo_hunts": buf["sum_solo_hunts"] / n,
+                "avg_coalition_hunts": buf["sum_coalition_hunts"] / n,
+                "avg_utility_solo": buf["sum_utility_solo"] / n,
+                "avg_utility_initiator": buf["sum_utility_initiator"] / n,
+                "avg_utility_partner": buf["sum_utility_partner"] / n,
+                "batch_size": n
+            }
+
+        # -----------------------------
+        # 5. Reset buffer for next batch
+        # -----------------------------
+        self.batch_buffer[tactic] = defaultdict(lambda: {
+            "count": 0,
+            "sum_solo_hunts": 0.0,
+            "sum_coalition_hunts": 0.0,
+            "sum_utility_solo": 0.0,
+            "sum_utility_initiator": 0.0,
+            "sum_utility_partner": 0.0
+        })
+
+        return batch_result
+    
+    def aggregate_batch(self, batch_list):
+        """
+        Aggregates a list of episode-level AVERAGE stats into batch averages.
+        """
+
+        totals = defaultdict(lambda: {
+            "avg_solo_hunts": 0.0,
+            "avg_coalition_hunts": 0.0,
+            "avg_utility_solo": 0.0,
+            "avg_utility_initiator": 0.0,
+            "avg_utility_partner": 0.0,
+            "count": 0
+        })
+
+        # -----------------------------
+        # Sum averages across episodes
+        # -----------------------------
+        for episode_stats in batch_list:
+
+            for predator_type, stats in episode_stats.items():
+
+                totals[predator_type]["avg_solo_hunts"] += stats["avg_solo_hunts"]
+                totals[predator_type]["avg_coalition_hunts"] += stats["avg_coalition_hunts"]
+                totals[predator_type]["avg_utility_solo"] += stats["avg_utility_solo"]
+                totals[predator_type]["avg_utility_initiator"] += stats["avg_utility_initiator"]
+                totals[predator_type]["avg_utility_partner"] += stats["avg_utility_partner"]
+                totals[predator_type]["count"] += 1
+
+        # -----------------------------
+        # Convert to batch averages
+        # -----------------------------
+        batch_results = {}
+
+        for predator_type, stats in totals.items():
+
+            n = stats["count"]
+
+            if n == 0:
+                continue
+
+            batch_results[predator_type] = {
+                "batch_size": n,
+                "avg_solo_hunts": stats["avg_solo_hunts"] / n,
+                "avg_coalition_hunts": stats["avg_coalition_hunts"] / n,
+                "avg_utility_solo": stats["avg_utility_solo"] / n,
+                "avg_utility_initiator": stats["avg_utility_initiator"] / n,
+                "avg_utility_partner": stats["avg_utility_partner"] / n,
+            }
+
+        return batch_results
+    
+    def log_results(self, episode_id, tactic, episode_stats, filepath="results"):
+        """
+        Logs episode-level aggregated results to CSV.
+
+        Args:
+            episode_id (int): current episode index
+            tactic (str): current tactic
+            episode_stats (dict): output of compute_episode_statistics()
+            filepath (str): output directory
+        """
+        # 1. Prepare file path
+        os.makedirs(filepath, exist_ok=True)
+        file_path = os.path.join(filepath, f"results_{tactic}.csv")
+
+        file_exists = os.path.exists(file_path)
+
+        # 2. Define headers
+        headers = [
+            "episode_id",
+            "tactic",
+            "predator_type",
+            "avg_solo_hunts",
+            "avg_coalition_hunts",
+            "avg_utility_solo",
+            "avg_utility_initiator",
+            "avg_utility_partner"
         ]
 
-        # Nice display names for subplots
-        stat_names = {
-            "solo_hunts_performed": "Solo Hunts Performed",
-            "coalition_hunts_performed": "Coalition Hunts Performed",
-            "utility_gained_solo": "Utility Gained (Solo)",
-            "utility_gained_initiator": "Utility Gained (Initiator)",
-            "utility_gained_partner": "Utility Gained (Partner)"
-        }
+        # 3. Write episode results
+        with open(file_path, mode="a", newline="") as f:
+            writer = csv.writer(f)
 
-        # Fixed colors for tactics
-        color_map = {
-            "EGALITARIAN": "green",
-            "ASYMMETRIC": "orange",
-            "ALTRUISTIC": "red",
-            "MERITOCRATIC": "blue"
-        }
+            # write header only once
+            if not file_exists:
+                writer.writerow(headers)
 
-        for predator in predators:
+            for predator_type, stats in episode_stats.items():
 
-            fig, axes = plt.subplots(3, 2, figsize=(12, 10), sharex=True)
-            axes = axes.flatten()
+                writer.writerow([
+                    episode_id,
+                    tactic,
+                    predator_type,
+                    round(stats["avg_solo_hunts"], 2),
+                    round(stats["avg_coalition_hunts"], 2),
+                    round(stats["avg_utility_solo"], 2),
+                    round(stats["avg_utility_initiator"], 2),
+                    round(stats["avg_utility_partner"], 2),
+                ])
 
-            # 🔹 Get predator type from the first tactic where it exists
-            pred_type = None
-            for tactic in tactics:
-                df = all_data[tactic]
-                predator_df = df[df["predator_id"] == predator]
-                if not predator_df.empty:
-                    pred_type = predator_df["predator_type"].iloc[0]
-                    break
+    def log_batch_results(self, batch_id, tactic, batch_stats, filepath="results"):
+        """
+        Logs batch-aggregated results to CSV.
 
-            fig.suptitle(
-                f"Predator {predator} ({pred_type}) - Per-Interval Dynamics Across Tactics",
-                fontsize=14
-            )
+        Args:
+            batch_id (int): index of the batch
+            tactic (str): current tactic
+            batch_stats (dict): output of aggregate_batch()
+            filepath (str): output directory
+        """
 
-            for i, stat in enumerate(stats):
+        # -----------------------------
+        # 1. Prepare file path
+        # -----------------------------
+        os.makedirs(filepath, exist_ok=True)
+        file_path = os.path.join(filepath, f"results_{tactic}.csv")
 
-                ax = axes[i]
+        file_exists = os.path.exists(file_path)
 
-                for tactic in tactics:
-                    df = all_data[tactic]
-                    predator_df = df[df["predator_id"] == predator]
+        # -----------------------------
+        # 2. Define headers
+        # -----------------------------
+        headers = [
+            "batch_id",
+            "tactic",
+            "predator_type",
+            "batch_size",
+            "avg_solo_hunts",
+            "avg_coalition_hunts",
+            "avg_utility_solo",
+            "avg_utility_initiator",
+            "avg_utility_partner"
+        ]
 
-                    if predator_df.empty:
-                        continue
+        # -----------------------------
+        # 3. Write batch results
+        # -----------------------------
+        with open(file_path, mode="a", newline="") as f:
+            writer = csv.writer(f)
 
-                    predator_df = predator_df.sort_values("episode_id")
+            # write header only once
+            if not file_exists:
+                writer.writerow(headers)
 
-                    # 🔹 Compute per-interval change (diff)
-                    values = predator_df[stat].diff().fillna(0)
+            for predator_type, stats in batch_stats.items():
 
-                    ax.plot(
-                        predator_df["episode_id"],
-                        values,
-                        label=tactic,
-                        color=color_map.get(tactic, "black")
-                    )
-
-                ax.set_title(stat_names[stat])
-                ax.grid(True, linestyle='--', alpha=0.3)
-                ax.axhline(0, linewidth=1, color='black')
-
-            # Hide unused subplot (6th slot)
-            axes[-1].axis("off")
-
-            # X labels only for bottom row
-            axes[4].set_xlabel("Episode")
-            axes[5].set_xlabel("Episode")
-
-            # Legend once
-            axes[1].legend()
-
-            plt.tight_layout(rect=[0, 0, 1, 0.96])
-            plt.show()
+                writer.writerow([
+                    batch_id,
+                    tactic,
+                    predator_type,
+                    stats["batch_size"],
+                    round(stats["avg_solo_hunts"], 2),
+                    round(stats["avg_coalition_hunts"], 2),
+                    round(stats["avg_utility_solo"], 2),
+                    round(stats["avg_utility_initiator"], 2),
+                    round(stats["avg_utility_partner"], 2),
+                ])
 
     def plot_tactic_comparison_means(self, results_dir="results"):
         """
-        For each predator type:
+        Episode-based plotting.
 
-        Figure 1 (1x2):
-            - Solo Hunts
-            - Coalition Hunts
+        Each row:
+            (episode_id, tactic, predator_type, metrics...)
 
-        Figure 2 (1x3):
-            - Utility Solo
-            - Utility Initiator
-            - Utility Partner
-
-        Each plot:
-            - Bar chart across tactics
-            - Mean across episodes
-            - 95% confidence interval
-            - Numeric value labels above bars
+        We compute:
+            mean across episodes
+            95% CI across episodes
         """
 
         pattern = os.path.join(results_dir, "results_*.csv")
@@ -379,34 +490,41 @@ class SimulationLogger:
         all_data = {}
         predator_types = set()
 
+        # -----------------------------
+        # Load all CSVs
+        # -----------------------------
         for filepath in files:
             filename = os.path.basename(filepath)
             tactic = filename.replace("results_", "").replace(".csv", "")
 
             df = pd.read_csv(filepath)
-            predator_types.update(df["predator_type"].unique())
+
             all_data[tactic] = df
+            predator_types.update(df["predator_type"].unique())
 
         tactics = sorted(all_data.keys())
         predator_types = sorted(predator_types)
 
+        # -----------------------------
+        # Metrics
+        # -----------------------------
         hunt_stats = [
-            "solo_hunts_performed",
-            "coalition_hunts_performed"
+            "avg_solo_hunts",
+            "avg_coalition_hunts"
         ]
 
         utility_stats = [
-            "utility_gained_solo",
-            "utility_gained_initiator",
-            "utility_gained_partner"
+            "avg_utility_solo",
+            "avg_utility_initiator",
+            "avg_utility_partner"
         ]
 
         stat_names = {
-            "solo_hunts_performed": "Solo Hunts Performed",
-            "coalition_hunts_performed": "Coalition Hunts Performed",
-            "utility_gained_solo": "Utility Gained (Solo)",
-            "utility_gained_initiator": "Utility Gained (Initiator)",
-            "utility_gained_partner": "Utility Gained (Partner)"
+            "avg_solo_hunts": "Solo Hunts Performed",
+            "avg_coalition_hunts": "Coalition Hunts Performed",
+            "avg_utility_solo": "Utility Gained (Solo)",
+            "avg_utility_initiator": "Utility Gained (Initiator)",
+            "avg_utility_partner": "Utility Gained (Partner)"
         }
 
         color_map = {
@@ -418,15 +536,19 @@ class SimulationLogger:
 
         bar_width = 0.5
 
-        def compute_stats(df, predator_type, stat):
+        # -----------------------------
+        # Core stats computation
+        # -----------------------------
+        def compute_stats(all_data, predator_type, stat):
+
             means = []
             ci_values = []
             colors = []
 
             for tactic in tactics:
 
-                tactic_df = df[tactic]
-                type_df = tactic_df[tactic_df["predator_type"] == predator_type]
+                df = all_data[tactic]
+                type_df = df[df["predator_type"] == predator_type]
 
                 if type_df.empty:
                     means.append(0)
@@ -434,22 +556,14 @@ class SimulationLogger:
                     colors.append(color_map.get(tactic, "black"))
                     continue
 
-                type_df = type_df.sort_values(["predator_id", "episode_id"])
+                # -----------------------------
+                # EPISODE VALUES (direct!)
+                # -----------------------------
+                values = type_df[stat]
 
-                type_df["diff"] = (
-                    type_df.groupby("predator_id")[stat]
-                    .diff()
-                    .fillna(0)
-                )
-
-                episode_values = (
-                    type_df.groupby("episode_id")["diff"]
-                    .mean()
-                )
-
-                mean_val = episode_values.mean()
-                std_val = episode_values.std()
-                n = len(episode_values)
+                mean_val = values.mean()
+                std_val = values.std()
+                n = len(values)
 
                 ci = 1.96 * (std_val / np.sqrt(n)) if n > 0 else 0
 
@@ -459,10 +573,11 @@ class SimulationLogger:
 
             return means, ci_values, colors
 
+        # -----------------------------
+        # Label helper
+        # -----------------------------
         def add_value_labels(ax, bars, means, cis):
-            """Add mean ± CI above each bar."""
             for bar, mean, ci in zip(bars, means, cis):
-
                 height = bar.get_height()
 
                 label = f"{mean:.2f}\n±{ci:.2f}"
@@ -476,12 +591,14 @@ class SimulationLogger:
                     fontsize=9
                 )
 
+        # =============================
+        # PLOTTING LOOP
+        # =============================
         for predator_type in predator_types:
 
-            # =========================
+            # -------------------------
             # FIGURE 1 — Hunts
-            # =========================
-
+            # -------------------------
             fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 
             for idx, stat in enumerate(hunt_stats):
@@ -497,15 +614,11 @@ class SimulationLogger:
                     means,
                     width=bar_width,
                     yerr=ci_values,
-                    color=colors,
-                    capsize=6
+                    capsize=6,
+                    color=colors
                 )
 
                 add_value_labels(ax, bars, means, ci_values)
-
-                # ADD SPACE ABOVE BARS
-                max_height = max([m + c for m, c in zip(means, ci_values)])
-                ax.set_ylim(0, max_height * 1.3)
 
                 ax.set_xticks(x)
                 ax.set_xticklabels(tactics)
@@ -513,19 +626,16 @@ class SimulationLogger:
                 ax.set_ylabel("Mean Value (95% CI)")
                 ax.grid(True, linestyle="--", alpha=0.3)
 
-            fig.suptitle(
-                f"Hunting Performance — Predator Type: {predator_type}",
-                fontsize=16
-            )
+                max_height = max([m + c for m, c in zip(means, ci_values)])
+                ax.set_ylim(0, max_height * 1.3)
 
+            fig.suptitle(f"Hunting Performance — Predator Type: {predator_type}", fontsize=16)
             plt.subplots_adjust(wspace=0.35, top=0.85)
-
             plt.show()
 
-            # =========================
+            # -------------------------
             # FIGURE 2 — Utilities
-            # =========================
-
+            # -------------------------
             fig, axes = plt.subplots(1, 3, figsize=(18, 6))
 
             for idx, stat in enumerate(utility_stats):
@@ -541,15 +651,11 @@ class SimulationLogger:
                     means,
                     width=bar_width,
                     yerr=ci_values,
-                    color=colors,
-                    capsize=6
+                    capsize=6,
+                    color=colors
                 )
 
                 add_value_labels(ax, bars, means, ci_values)
-
-                # ADD SPACE ABOVE BARS
-                max_height = max([m + c for m, c in zip(means, ci_values)])
-                ax.set_ylim(0, max_height * 1.3)
 
                 ax.set_xticks(x)
                 ax.set_xticklabels(tactics)
@@ -557,13 +663,11 @@ class SimulationLogger:
                 ax.set_ylabel("Mean Value (95% CI)")
                 ax.grid(True, linestyle="--", alpha=0.3)
 
-            fig.suptitle(
-                f"Utility Distribution — Predator Type: {predator_type}",
-                fontsize=16
-            )
+                max_height = max([m + c for m, c in zip(means, ci_values)])
+                ax.set_ylim(0, max_height * 1.3)
 
+            fig.suptitle(f"Utility Distribution — Predator Type: {predator_type}", fontsize=16)
             plt.subplots_adjust(wspace=0.35, top=0.85)
-
             plt.show()
 
 # =============================================================================
@@ -740,42 +844,6 @@ class SimulationEngine:
         """ Calculates the Expected Utility of resting, E[U_Rest] = 0.0 (Idle, No Gain). """
         return 0.0
 
-    def Action_MOVE_utilityOLD(self, predator):
-        """ Calculates the best Expected Utility of Moving to a specific Hex. """
-        """ Using the Bellman's Equation, Hexes with worthwhile prey are prioritized. """
-        gamma = 0.9
-        neighbor_hexes = self.grid.get_neighbor_hexes(predator.q, predator.r)
-
-        best_move_utility = float('-inf')
-        best_hex = None
-
-        for (new_q, new_r) in neighbor_hexes:
-            
-            V_best_hex = 0
-            for prey in self.prey:
-
-                P_capture = COMPUTE.P_capture_value(prey.P_solo, predator.M_i, prey.b_a, 1)
-                U_solo = COMPUTE.Exp_Utility_value(P_capture, 1.0, prey.R_a, predator.C_hunt_i)
-
-                distance = axial_distance((new_q, new_r), (prey.q, prey.r))
-
-                if distance == 0:
-                    V_adj_hex = U_solo
-                else:
-                    discounted_reward = (gamma ** distance) * U_solo
-                    discounted_move_cost = C_MOVE * (1 - gamma ** distance)  / (1 - gamma)
-                    V_adj_hex = discounted_reward - discounted_move_cost
-
-                V_best_hex = max(V_best_hex, V_adj_hex)
-
-            move_utility = -C_MOVE + gamma * V_best_hex
-
-            if move_utility > best_move_utility:
-                best_move_utility = move_utility
-                best_hex = (new_q, new_r)
-
-        return best_move_utility, best_hex[0], best_hex[1]
-
     def Action_MOVE_utility(self, predator):
         """
         Assigns a forward-looking (myopic) utility to moving.
@@ -932,7 +1000,6 @@ class SimulationEngine:
             elif action_type == Action.SOLO_HUNT:
                 p.utility_gained_solo += utility
                 p.solo_hunts_performed += 1
-      
 
     def execute_coalition_negotiation(self, initiator, target_prey):
         """Iterative coalition negotiation until stable acceptance."""
@@ -1192,7 +1259,7 @@ class COMPUTE:
 # =============================================================================
 # 6. HEADLESS CONTROLLER (The Episode Loop)
 # =============================================================================
-def run_batch_simulation(episodes = 50):
+def run_normal_simulation(episodes = 50):
     """ Main loop to run multiple episodes and log results to CSV. """
     logger = SimulationLogger("results")
     tactics = ["EGALITARIAN", "MERITOCRATIC", "ALTRUISTIC", "ASYMMETRIC"]
@@ -1215,15 +1282,61 @@ def run_batch_simulation(episodes = 50):
                 engine.step()
                 engine.current_tick += 1
 
-            logger.update_global_stats(predators, tactic)
-            # if (ep + 1) % 5 == 0 or ep == episodes - 1:
-            logger.log_results(ep, predators, tactic)
+            episode_stats = logger.compute_episode_statistics(predators)
+            logger.log_results(ep, tactic, episode_stats)
+            # # if (ep + 1) % 5 == 0 or ep == episodes - 1:
+            # logger.log_results(ep, predators, tactic)
 
+    logger.plot_tactic_comparison_means("results")
+
+def run_batch_simulation(episodes = 50, batch_size = 10):
+    """ Main loop to run multiple episodes and log results to CSV. """
+    logger = SimulationLogger("results")
+    tactics = ["EGALITARIAN", "MERITOCRATIC", "ALTRUISTIC", "ASYMMETRIC"]
+    max_ticks = 500
+
+    batch_storage = {tactic: [] for tactic in tactics}
+
+    for tactic in tactics:
+
+        batch_id = 0
+        for ep in range(episodes):
+
+            engine = SimulationEngine(predator_count=10, prey_count=25, radius=5, tactic=tactic, seed = ep)
+            predators = engine.predators
+
+            # 1. --- Run the Episode ---
+            while  engine.current_tick < max_ticks and any(p.is_alive for p in predators):
+                engine.step()
+                engine.current_tick += 1
+            
+            # 2. --- Compute the Episode Stats ---
+            episode_stats = logger.compute_episode_statistics(predators)
+
+            # 3. --- Store in batch ---
+            batch_storage[tactic].append(episode_stats)
+
+            # 4. --- If batch full -> aggregate + log ---
+            if len(batch_storage[tactic]) == batch_size:
+                batch_stats = logger.aggregate_batch(batch_storage[tactic])
+                logger.log_batch_results(batch_id, tactic, batch_stats)
+
+                batch_storage[tactic] = []
+                batch_id += 1
+
+        # 5. --- Handle Leftover Episodes --- 
+        if batch_storage[tactic]:
+            batch_stats = logger.aggregate_batch(batch_storage[tactic])
+
+            logger.log_batch_results(batch_id, tactic, batch_stats)
+
+            batch_storage[tactic] = []
+
+    # 6. --- Plot the results ---
     logger.plot_tactic_comparison_means("results")
 
 if __name__ == "__main__":
     run_batch_simulation()
-    #print("Structure ready. Waiting for step-by-step logic implementation.")
 
 # =============================================================================
 # 7. SEED VERIFICATION SCRIPT
