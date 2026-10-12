@@ -2,25 +2,18 @@ using UnityEngine;
 
 public abstract class Agent : MonoBehaviour
 {
+    [Header("Base Variables")]
+    public int id;
+    public int q; // grid position
+    public int r; // grid position
 
-    public int agentID;
-
-    [Header("Stats")]
-    public float speed;
-    public float health;
-
-    [Header("State")]
-    public Vector3 currentPosition;
     public bool isAlive = true;
 
-    protected virtual void Start()
+    // --- Initialization ---
+    public virtual void Initialize(int id, int q, int r)
     {
-        
-    }
-
-
-    protected virtual void Update()
-    {
-        
+        this.id = id;
+        this.q = q;
+        this.r = r;
     }
 }
